@@ -1,88 +1,114 @@
 #!/usr/bin/env python3
-import os
-import pty
-import select
-import subprocess
-import sys
-import termios
-import tty
+"""
+PTY helper for Simple Terminal plugin
+Based on obsidian-terminal's unix_pseudoterminal.py
+"""
+from os import (
+    environ as _environ,
+    execvp as _execvp,
+    read as _read,
+    waitpid as _waitpid,
+    waitstatus_to_exitcode as _ws_to_ec,
+    write as _write,
+)
+from selectors import DefaultSelector as _DefaultSelector, EVENT_READ as _EVENT_READ
+from struct import pack as _pack
+import sys as _sys
+from sys import exit as _exit, stdin as _stdin, stdout as _stdout
+from typing import Callable as _Callable, cast as _cast
 
-def main():
-    """
-    PTY helper script for the Obsidian Terminal plugin.
-    This script creates a pseudo-terminal and spawns a shell,
-    forwarding input/output between the shell and stdout/stdin.
-    """
-    # Determine which shell to use
-    shell = os.environ.get('SHELL', '/bin/zsh')
+if _sys.platform != "win32":
+    from fcntl import ioctl as _ioctl
+    import pty as _pty
+    from termios import TIOCSWINSZ as _TIOCSWINSZ
 
-    # Create a pseudo-terminal
-    master_fd, slave_fd = pty.openpty()
+    _FORK = _cast(
+        _Callable[[], tuple[int, int]],
+        _pty.fork,  # type: ignore
+    )
+    _CHUNK_SIZE = 1024
+    _STDIN = _stdin.fileno()
+    _STDOUT = _stdout.fileno()
+    _CMDIO = 3  # File descriptor for resize commands
 
-    # Spawn the shell process
-    pid = os.fork()
+    def main():
+        # Determine which shell to use
+        shell = _environ.get('SHELL', '/bin/zsh')
 
-    if pid == 0:
-        # Child process
-        os.close(master_fd)
+        # Fork and create PTY
+        pid, pty_fd = _FORK()
 
-        # Create a new session
-        os.setsid()
+        if pid == 0:
+            # Child process - execute the shell
+            _execvp(shell, [shell])
 
-        # Set controlling terminal
-        os.dup2(slave_fd, 0)
-        os.dup2(slave_fd, 1)
-        os.dup2(slave_fd, 2)
+        # Parent process - handle I/O
+        def write_all(fd: int, data: bytes):
+            """Write all data to file descriptor"""
+            while data:
+                data = data[_write(fd, data):]
 
-        if slave_fd > 2:
-            os.close(slave_fd)
+        with _DefaultSelector() as selector:
+            running = True
 
-        # Execute the shell
-        os.execvp(shell, [shell])
-    else:
-        # Parent process
-        os.close(slave_fd)
-
-        # Set terminal to raw mode for stdin
-        old_settings = None
-        try:
-            old_settings = termios.tcgetattr(sys.stdin)
-            tty.setraw(sys.stdin.fileno())
-        except:
-            # If we can't set raw mode, continue anyway
-            pass
-
-        try:
-            while True:
-                # Use select to wait for input from either stdin or the pty
-                readable, _, _ = select.select([sys.stdin, master_fd], [], [])
-
-                for fd in readable:
-                    if fd == sys.stdin:
-                        # Read from stdin and write to pty
-                        data = os.read(sys.stdin.fileno(), 1024)
-                        if data:
-                            os.write(master_fd, data)
-                    elif fd == master_fd:
-                        # Read from pty and write to stdout
-                        try:
-                            data = os.read(master_fd, 1024)
-                            if data:
-                                sys.stdout.buffer.write(data)
-                                sys.stdout.buffer.flush()
-                            else:
-                                # EOF - shell exited
-                                return
-                        except OSError:
-                            # PTY closed
-                            return
-        finally:
-            # Restore terminal settings
-            if old_settings:
+            def pipe_pty():
+                """Read from PTY and write to stdout"""
+                nonlocal running
                 try:
-                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-                except:
-                    pass
+                    data = _read(pty_fd, _CHUNK_SIZE)
+                except OSError:
+                    data = b""
+                if not data:
+                    selector.unregister(pty_fd)
+                    running = False
+                    return
+                write_all(_STDOUT, data)
 
-if __name__ == '__main__':
+            def pipe_stdin():
+                """Read from stdin and write to PTY"""
+                data = _read(_STDIN, _CHUNK_SIZE)
+                if not data:
+                    selector.unregister(_STDIN)
+                    return
+                write_all(pty_fd, data)
+
+            def process_cmdio():
+                """Process resize commands from file descriptor 3"""
+                data = _read(_CMDIO, _CHUNK_SIZE)
+                if not data:
+                    selector.unregister(_CMDIO)
+                    return
+                # Parse resize commands in format "ROWSxCOLUMNS"
+                for line in data.decode("UTF-8", "strict").splitlines():
+                    try:
+                        rows, columns = (int(ss.strip()) for ss in line.split("x", 2))
+                        # Set window size using ioctl
+                        _ioctl(
+                            pty_fd,
+                            _TIOCSWINSZ,
+                            _pack("HHHH", rows, columns, 0, 0),
+                        )
+                    except (ValueError, IndexError):
+                        # Ignore malformed resize commands
+                        pass
+
+            # Register I/O handlers
+            selector.register(pty_fd, _EVENT_READ, pipe_pty)
+            selector.register(_STDIN, _EVENT_READ, pipe_stdin)
+            selector.register(_CMDIO, _EVENT_READ, process_cmdio)
+
+            # Event loop
+            while running:
+                for key, _ in selector.select():
+                    key.data()
+
+        # Wait for child process and exit with its code
+        _exit(_ws_to_ec(_waitpid(pid, 0)[1]))
+
+else:
+    def main():
+        raise NotImplementedError(_sys.platform)
+
+
+if __name__ == "__main__":
     main()

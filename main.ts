@@ -1,5 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting, ItemView, WorkspaceLeaf } from 'obsidian';
-import { Terminal } from 'xterm';
+import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { spawn, ChildProcess } from 'child_process';
@@ -122,6 +122,7 @@ class TerminalView extends ItemView {
 	terminal: Terminal;
 	fitAddon: FitAddon;
 	ptyProcess: ChildProcess | null = null;
+	resizeStream: NodeJS.WritableStream | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: TerminalPlugin) {
 		super(leaf);
@@ -190,6 +191,8 @@ class TerminalView extends ItemView {
 		// Handle resize
 		const resizeObserver = new ResizeObserver(() => {
 			this.fitAddon.fit();
+			// Send new size to PTY
+			this.sendResize();
 		});
 		resizeObserver.observe(container);
 
@@ -203,12 +206,36 @@ class TerminalView extends ItemView {
 
 	startPtyProcess() {
 		const vaultPath = (this.app.vault.adapter as any).basePath;
-		const helperPath = path.join(__dirname, 'pty-helper.py');
+		// Get the plugin directory path
+		const pluginDir = path.join(vaultPath, '.obsidian', 'plugins', 'simple-terminal');
+		const helperPath = path.join(pluginDir, 'pty-helper.py');
 
-		// Spawn Python PTY helper
+		console.log('Terminal: Starting PTY with:', this.plugin.settings.pythonPath, helperPath);
+
+		// Set up environment
+		const env = { ...process.env };
+		env['TERM'] = 'xterm-256color';
+		env['COLORTERM'] = 'truecolor';
+
+		// Spawn Python PTY helper with 4 stdio streams
+		// [0: stdin, 1: stdout, 2: stderr, 3: resize control]
 		this.ptyProcess = spawn(this.plugin.settings.pythonPath, [helperPath], {
 			cwd: vaultPath,
-			env: process.env
+			env: env,
+			stdio: ['pipe', 'pipe', 'pipe', 'pipe']
+		});
+
+		console.log('Terminal: PTY process spawned, PID:', this.ptyProcess.pid);
+
+		// Store the resize stream (file descriptor 3)
+		this.resizeStream = (this.ptyProcess.stdio[3] as NodeJS.WritableStream);
+
+		// Send initial terminal size
+		this.sendResize();
+
+		this.ptyProcess.on('error', (err) => {
+			console.error('Terminal: PTY process error:', err);
+			this.terminal.write(`\r\n\x1b[31mProcess error: ${err.message}\x1b[0m\r\n`);
 		});
 
 		if (this.ptyProcess.stdout) {
@@ -219,13 +246,25 @@ class TerminalView extends ItemView {
 
 		if (this.ptyProcess.stderr) {
 			this.ptyProcess.stderr.on('data', (data) => {
+				console.error('Terminal: PTY stderr:', data.toString());
 				this.terminal.write(`\r\n\x1b[31mError: ${data.toString()}\x1b[0m\r\n`);
 			});
 		}
 
 		this.ptyProcess.on('exit', (code) => {
+			console.log('Terminal: PTY process exited with code', code);
 			this.terminal.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
 		});
+	}
+
+	sendResize() {
+		if (this.resizeStream && this.terminal) {
+			const rows = this.terminal.rows;
+			const cols = this.terminal.cols;
+			// Send in format "ROWSxCOLUMNS\n"
+			this.resizeStream.write(`${rows}x${cols}\n`);
+			console.log(`Terminal: Sent resize ${rows}x${cols}`);
+		}
 	}
 
 	async onClose() {
