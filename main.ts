@@ -69,15 +69,14 @@ export default class TerminalPlugin extends Plugin {
 
 	async openNewTerminal() {
 		const { workspace } = this.app;
-		const rightLeaf = workspace.getRightLeaf(false);
+		// Create new tab in main editor area
+		const leaf = workspace.getLeaf('tab');
 
-		if (rightLeaf) {
-			await rightLeaf.setViewState({
-				type: VIEW_TYPE_TERMINAL,
-				active: true,
-			});
-			workspace.revealLeaf(rightLeaf);
-		}
+		await leaf.setViewState({
+			type: VIEW_TYPE_TERMINAL,
+			active: true,
+		});
+		workspace.revealLeaf(leaf);
 	}
 
 	async activateTerminal() {
@@ -89,14 +88,12 @@ export default class TerminalPlugin extends Plugin {
 		if (leaves.length > 0) {
 			leaf = leaves[0];
 		} else {
-			const rightLeaf = workspace.getRightLeaf(false);
-			if (rightLeaf) {
-				leaf = rightLeaf;
-				await leaf.setViewState({
-					type: VIEW_TYPE_TERMINAL,
-					active: true,
-				});
-			}
+			// Create new tab in main editor area
+			leaf = workspace.getLeaf('tab');
+			await leaf.setViewState({
+				type: VIEW_TYPE_TERMINAL,
+				active: true,
+			});
 		}
 
 		if (leaf) {
