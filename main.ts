@@ -15,7 +15,7 @@ interface TerminalSettings {
 
 const DEFAULT_SETTINGS: TerminalSettings = {
 	pythonPath: 'python3',
-	fontSize: 14,
+	fontSize: 16,
 	fontFamily: 'monospace'
 };
 
@@ -180,9 +180,19 @@ class TerminalView extends ItemView {
 		container.empty();
 		container.addClass('terminal-container');
 
+		// Remove outer padding for main area
+		(container as HTMLElement).style.padding = '0';
+
+		// Detect if we're in a sidebar
+		const isInSidebar = this.leaf.getRoot() !== this.app.workspace.rootSplit;
+
+		// Different styling for sidebar vs main area
+		const fontSize = isInSidebar ? 12 : this.plugin.settings.fontSize;
+		const padding = isInSidebar ? '6px' : '8px';
+
 		// Create terminal
 		this.terminal = new Terminal({
-			fontSize: this.plugin.settings.fontSize,
+			fontSize: fontSize,
 			fontFamily: this.plugin.settings.fontFamily,
 			theme: {
 				background: '#202020',
@@ -217,6 +227,13 @@ class TerminalView extends ItemView {
 		this.terminal.loadAddon(new WebLinksAddon());
 
 		this.terminal.open(container as HTMLElement);
+
+		// Apply padding to xterm element
+		const xtermElement = container.querySelector('.xterm') as HTMLElement;
+		if (xtermElement) {
+			xtermElement.style.padding = padding;
+		}
+
 		this.fitAddon.fit();
 
 		// Start PTY process
