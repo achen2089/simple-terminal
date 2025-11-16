@@ -1,94 +1,422 @@
-# Obsidian Sample Plugin
+# Simple Terminal - Obsidian Plugin
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+A fully functional, integrated terminal emulator for Obsidian that provides native shell access within your vault. Built with xterm.js and a Python PTY helper for cross-platform terminal support.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## Features
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+- **Full Terminal Emulation**: Complete xterm.js-powered terminal with 256-color support
+- **Multiple Terminal Instances**: Open terminals in tabs or sidebars
+- **Adaptive Styling**: Automatic styling based on location (main area vs sidebar)
+- **Proper PTY Support**: Uses Python's `pty` module for authentic shell experience
+- **Dynamic Resizing**: Terminals resize correctly when moved or window changes
+- **Configurable**: Customizable Python path, font size, and font family
 
-## First time developing plugins?
+## Architecture
 
-Quick starting guide for new plugin devs:
+### Overview
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+The plugin uses a hybrid architecture combining TypeScript (Obsidian plugin) and Python (PTY management):
 
-## Releasing new releases
+```
+┌─────────────────────────────────────────────┐
+│         Obsidian (Electron/Node.js)         │
+│  ┌───────────────────────────────────────┐  │
+│  │     TerminalView (TypeScript)         │  │
+│  │  ┌─────────────────────────────────┐  │  │
+│  │  │     xterm.js Terminal UI        │  │  │
+│  │  └─────────────────────────────────┘  │  │
+│  │              ↕ (writes/reads)         │  │
+│  │  ┌─────────────────────────────────┐  │  │
+│  │  │   Node.js Child Process         │  │  │
+│  │  │   (pty-helper.py)               │  │  │
+│  │  │   - stdin  (fd 0) ←─────────────┼──┼──── User input
+│  │  │   - stdout (fd 1) ──────────────┼──┼───► Terminal output
+│  │  │   - stderr (fd 2) ──────────────┼──┼───► Error output
+│  │  │   - resize (fd 3) ←─────────────┼──┼──── Resize commands
+│  │  └─────────────────────────────────┘  │  │
+│  └───────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+                      ↕
+         ┌────────────────────────┐
+         │  Python PTY Helper     │
+         │  (pty-helper.py)       │
+         │  ┌──────────────────┐  │
+         │  │  pty.fork()      │  │
+         │  │  Shell Process   │  │
+         │  │  (zsh/bash)      │  │
+         │  └──────────────────┘  │
+         └────────────────────────┘
+```
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### Components
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+#### 1. **main.ts** - Obsidian Plugin Core
+- Registers the terminal view type with Obsidian
+- Provides commands: Toggle, Open new tab, Open in sidebar
+- Manages plugin settings and configuration
+- Handles terminal lifecycle (creation, activation, cleanup)
 
-## Adding your plugin to the community plugin list
+#### 2. **TerminalView Class** - UI and Process Management
+- Extends Obsidian's `ItemView` to integrate with workspace
+- Creates xterm.js terminal instances with custom theming
+- Spawns Python PTY helper as child process with 4 stdio streams
+- Manages bidirectional communication between terminal UI and shell
+- Implements resize handling via dedicated control stream
+- Detects sidebar vs main area placement for adaptive styling
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+#### 3. **pty-helper.py** - PTY Management
+- Uses Python's `pty.fork()` to create pseudo-terminal
+- Spawns user's shell (respects `$SHELL` environment variable)
+- Implements event-based I/O multiplexing with `selectors` module
+- Handles three concurrent data streams:
+  - **stdin → PTY**: User input from terminal
+  - **PTY → stdout**: Shell output to terminal
+  - **fd 3 → PTY**: Resize commands (format: `ROWSxCOLUMNS\n`)
+- Exits with shell's exit code for proper cleanup
 
-## How to use
+#### 4. **styles.css** - Terminal Styling
+- Includes complete xterm.js base styles
+- Custom terminal container with dark theme
+- Dynamic padding applied via JavaScript based on location
+- Custom scrollbar styling for better integration
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+## File Structure
 
-## Manually installing the plugin
+```
+simple-terminal/
+├── main.ts              # Plugin entry point and view implementation
+├── pty-helper.py        # Python PTY wrapper
+├── styles.css           # Terminal and xterm.js styles
+├── manifest.json        # Plugin metadata
+├── package.json         # Node.js dependencies
+├── tsconfig.json        # TypeScript configuration
+├── esbuild.config.mjs   # Build configuration
+└── README.md            # This file
+```
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+## How It Works
 
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint ./src/`
+### Terminal Creation Flow
 
-## Funding URL
+1. **User triggers command** (toggle/new tab/sidebar)
+2. **Plugin creates WorkspaceLeaf** in appropriate location
+3. **TerminalView.onOpen() executes**:
+   - Detects if in sidebar: `this.leaf.getRoot() !== this.app.workspace.rootSplit`
+   - Sets appropriate font size and padding
+   - Creates xterm.js Terminal instance
+   - Loads FitAddon (auto-sizing) and WebLinksAddon (clickable URLs)
+4. **Spawns Python PTY helper** with 4 stdio streams
+5. **Sets up event handlers**:
+   - User typing → sends to PTY stdin
+   - PTY stdout → writes to xterm.js display
+   - Window resize → sends dimensions to resize stream
+6. **Terminal becomes interactive**
 
-You can include funding URLs where people who use your plugin can financially support it.
+### Communication Protocol
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+#### Data Flow (stdin/stdout)
+```
+User types "ls" → xterm.onData() → ptyProcess.stdin.write()
+                                           ↓
+                                    Python helper reads
+                                           ↓
+                                    Writes to PTY master
+                                           ↓
+                                    Shell executes "ls"
+                                           ↓
+                                    Shell writes output
+                                           ↓
+                                    Python reads from PTY
+                                           ↓
+                                    Writes to stdout
+                                           ↓
+ptyProcess.stdout.on('data') → terminal.write() → User sees output
+```
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
+#### Resize Protocol
+```
+Window resized → ResizeObserver triggers → fitAddon.fit()
+                                                ↓
+                                        terminal.rows/cols updated
+                                                ↓
+                                    resizeStream.write("24x80\n")
+                                                ↓
+                                    Python reads from fd 3
+                                                ↓
+                                    Parses "ROWSxCOLUMNS"
+                                                ↓
+                                    ioctl(TIOCSWINSZ) on PTY
+                                                ↓
+                                    Shell receives SIGWINCH
+                                                ↓
+                                    Terminal works at new size
+```
+
+### Styling Strategy
+
+The plugin uses **location-aware styling**:
+
+**Main Area Terminals**:
+- Font size: 16px (configurable via settings)
+- Inner padding: 8px
+- Outer padding: 0 (removed via JavaScript)
+- Use case: Primary work terminal
+
+**Sidebar Terminals**:
+- Font size: 12px (fixed)
+- Inner padding: 6px
+- Outer padding: 0
+- Use case: Monitoring, quick commands
+
+Detection method:
+```typescript
+const isInSidebar = this.leaf.getRoot() !== this.app.workspace.rootSplit;
+```
+
+Styling is applied dynamically in `onOpen()` by:
+1. Setting terminal font size during construction
+2. Applying padding to `.xterm` element after rendering
+
+## Development
+
+### Setup
+
+```bash
+# Install dependencies
+npm install
+
+# Development build (watch mode)
+npm run dev
+
+# Production build
+npm run build
+```
+
+### Prerequisites
+
+- **Node.js**: v16 or higher
+- **Python 3**: For PTY helper (uses `pty` module, Unix-only)
+- **Obsidian**: Latest version
+
+### Project Dependencies
+
+**TypeScript/Node.js**:
+- `@xterm/xterm`: Terminal emulator core
+- `@xterm/addon-fit`: Auto-sizing addon
+- `@xterm/addon-web-links`: URL detection and linking
+- `obsidian`: Obsidian API types
+
+**Python**:
+- Standard library only (`pty`, `os`, `selectors`, `struct`)
+
+### Making Changes
+
+#### Modifying Terminal Appearance
+
+**Change color theme** (`main.ts:190-212`):
+```typescript
+theme: {
+    background: '#202020',    // Terminal background
+    foreground: '#dcddde',    // Text color
+    cursor: '#7c9dff',        // Cursor color
+    // ... 16 color palette
 }
 ```
 
-If you have multiple URLs, you can also do:
+**Adjust padding** (`main.ts:191`):
+```typescript
+const padding = isInSidebar ? '6px' : '8px';  // Modify values here
+```
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
+**Change font sizes** (`main.ts:190`):
+```typescript
+const fontSize = isInSidebar ? 12 : this.plugin.settings.fontSize;
+```
+
+#### Adding Terminal Features
+
+**Example: Add custom keybinding**
+
+1. In `TerminalView.onOpen()`, add after terminal creation:
+```typescript
+this.terminal.attachCustomKeyEventHandler((event) => {
+    if (event.ctrlKey && event.key === 'k') {
+        // Clear terminal
+        this.terminal.clear();
+        return false; // Prevent default
     }
+    return true; // Allow default handling
+});
+```
+
+**Example: Add search functionality**
+
+1. Install addon: `npm install @xterm/addon-search`
+2. Import in `main.ts`:
+```typescript
+import { SearchAddon } from '@xterm/addon-search';
+```
+3. Load addon in `onOpen()`:
+```typescript
+const searchAddon = new SearchAddon();
+this.terminal.loadAddon(searchAddon);
+```
+
+#### Modifying PTY Behavior
+
+**Change default shell** (`pty-helper.py:36`):
+```python
+shell = _environ.get('SHELL', '/bin/zsh')  # Change default here
+```
+
+**Add environment variables** (`main.ts:253-255`):
+```typescript
+const env = { ...process.env };
+env['TERM'] = 'xterm-256color';
+env['MY_CUSTOM_VAR'] = 'value';  // Add here
+```
+
+**Modify initial directory** (`main.ts:260`):
+```typescript
+this.ptyProcess = spawn(this.plugin.settings.pythonPath, [helperPath], {
+    cwd: vaultPath,  // Change to different directory
+    // ...
+});
+```
+
+#### Adding Settings
+
+1. **Update interface** (`main.ts:10-14`):
+```typescript
+interface TerminalSettings {
+    pythonPath: string;
+    fontSize: number;
+    fontFamily: string;
+    myNewSetting: boolean;  // Add here
 }
 ```
 
-## API Documentation
+2. **Add default value** (`main.ts:16-20`):
+```typescript
+const DEFAULT_SETTINGS: TerminalSettings = {
+    // ...
+    myNewSetting: true,  // Add default
+};
+```
 
-See https://github.com/obsidianmd/obsidian-api
+3. **Add UI control** in `TerminalSettingTab.display()`:
+```typescript
+new Setting(containerEl)
+    .setName('My Setting')
+    .setDesc('Description here')
+    .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.myNewSetting)
+        .onChange(async (value) => {
+            this.plugin.settings.myNewSetting = value;
+            await this.plugin.saveSettings();
+        }));
+```
+
+### Testing Changes
+
+1. **Build**: `npm run build`
+2. **Reload Obsidian**: Ctrl/Cmd + R or restart
+3. **Open terminal**: Use ribbon icon or command palette
+4. **Check console**: Ctrl/Cmd + Shift + I for dev tools
+
+### Debugging
+
+**Enable verbose logging**:
+
+Add to `startPtyProcess()`:
+```typescript
+console.log('Terminal: Starting PTY with:', this.plugin.settings.pythonPath, helperPath);
+console.log('Terminal: PTY process spawned, PID:', this.ptyProcess.pid);
+```
+
+**Monitor Python helper**:
+
+Add to `pty-helper.py`:
+```python
+import sys
+sys.stderr.write(f"PTY: Shell started: {shell}\n")
+sys.stderr.flush()
+```
+
+**Common issues**:
+- **PTY not found**: Check Python path in settings
+- **Terminal not displaying**: Check console for xterm.js errors
+- **Resize not working**: Verify resize stream (fd 3) is writable
+- **Colors wrong**: Check `TERM` and `COLORTERM` environment variables
+
+## Design Decisions
+
+### Why Python PTY Helper?
+
+**Rejected approach**: node-pty (native Node.js addon)
+- ❌ Requires C++ compilation on installation
+- ❌ Platform-specific build issues
+- ❌ Maintenance burden with Node.js version changes
+
+**Chosen approach**: Python helper script
+- ✅ Python's `pty` module is battle-tested
+- ✅ No native compilation required
+- ✅ Easy to debug and modify
+- ✅ Cross-platform (Unix systems have Python)
+- ✅ Based on proven implementation (obsidian-terminal)
+
+### Why 4 stdio streams?
+
+Standard approach is 3 streams (stdin/stdout/stderr). We added a 4th for resize:
+
+**Alternative**: Send resize via stdin with special escape sequences
+- ❌ Conflicts with user input
+- ❌ Requires parsing/filtering
+- ❌ Race conditions possible
+
+**Our approach**: Dedicated resize stream (fd 3)
+- ✅ Clean separation of concerns
+- ✅ No parsing overhead
+- ✅ Simple protocol: `ROWSxCOLUMNS\n`
+- ✅ Immediate, reliable resize
+
+### Why Location-Based Styling?
+
+Users have different needs for sidebar vs main area:
+- **Sidebar**: Compact, monitoring, less important
+- **Main area**: Primary workspace, needs readability
+
+Dynamic detection allows single codebase to optimize for both use cases.
+
+## Future Enhancements
+
+Potential improvements:
+
+- [ ] **Multiple shell profiles**: Different shells per terminal
+- [ ] **Session persistence**: Save/restore terminal state
+- [ ] **Split panes**: Multiple shells in one view
+- [ ] **Custom themes**: User-defined color schemes
+- [ ] **Ligature support**: Better font rendering
+- [ ] **Search functionality**: Find in terminal output
+- [ ] **Tab completion hints**: Visual autocomplete
+- [ ] **Windows support**: Use ConPTY or similar
+
+## Contributing
+
+When making changes:
+
+1. Follow existing code style (tabs, TypeScript strict mode)
+2. Test in both sidebar and main area
+3. Verify resize works correctly
+4. Check with different shells (bash, zsh, fish)
+5. Update README if adding features
+
+## License
+
+MIT
+
+## Credits
+
+- Based on architecture from [obsidian-terminal](https://github.com/polyipseity/obsidian-terminal)
+- Uses [xterm.js](https://xtermjs.org/) for terminal emulation
+- Built for [Obsidian](https://obsidian.md/)
