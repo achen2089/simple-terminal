@@ -53,15 +53,38 @@ export default class TerminalPlugin extends Plugin {
 			}
 		});
 
+		// Add command to open in right sidebar
+		this.addCommand({
+			id: 'open-terminal-sidebar',
+			name: 'Simple Terminal: Open in sidebar',
+			callback: () => {
+				this.openInSidebar();
+			}
+		});
+
 		// Add settings tab
 		this.addSettingTab(new TerminalSettingTab(this.app, this));
 	}
 
 	async toggleTerminal() {
-		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_TERMINAL);
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(VIEW_TYPE_TERMINAL);
 
 		if (existing.length > 0) {
-			existing.forEach(leaf => leaf.detach());
+			// Find the most recently active terminal
+			const activeLeaf = existing.find(leaf => leaf === workspace.activeLeaf);
+			if (activeLeaf) {
+				// If we're already on a terminal, close all terminals
+				existing.forEach(leaf => leaf.detach());
+			} else {
+				// Activate the most recent terminal
+				const mostRecent = existing.sort((a, b) => {
+					const aTime = (a.view as any).lastActiveTime || 0;
+					const bTime = (b.view as any).lastActiveTime || 0;
+					return bTime - aTime;
+				})[0];
+				workspace.setActiveLeaf(mostRecent, { focus: true });
+			}
 		} else {
 			await this.activateTerminal();
 		}
@@ -77,6 +100,20 @@ export default class TerminalPlugin extends Plugin {
 			active: true,
 		});
 		workspace.revealLeaf(leaf);
+	}
+
+	async openInSidebar() {
+		const { workspace } = this.app;
+		// Create in right sidebar
+		const leaf = workspace.getRightLeaf(false);
+
+		if (leaf) {
+			await leaf.setViewState({
+				type: VIEW_TYPE_TERMINAL,
+				active: true,
+			});
+			workspace.revealLeaf(leaf);
+		}
 	}
 
 	async activateTerminal() {
