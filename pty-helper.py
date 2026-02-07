@@ -40,7 +40,7 @@ if _sys.platform != "win32":
 
         if pid == 0:
             # Child process - execute the shell
-            _execvp(shell, [shell])
+            _execvp(shell, [shell, '-l'])
 
         # Parent process - handle I/O
         def write_all(fd: int, data: bytes):
